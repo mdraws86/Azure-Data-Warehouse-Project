@@ -52,7 +52,7 @@ WITH (
 )
 AS
 SELECT
-    ROW_NUMBER() OVER (ORDER BY d.[date]) as date_key,
+    CAST(CONVERT(varchar(8), d.[date], 112) as BIGINT) as date_key, -- Source: https://stackoverflow.com/questions/41353285/sql-server-date-format-yyyymmdd
     d.[date],
     DATENAME(dw, d.[date]) as [day_name], -- Source: https://blog.sqlauthority.com/2012/11/25/sql-server-find-weekend-and-weekdays-from-datetime-in-sql-server-2012/
     DATEPART(dw, d.[date]) as [day_of_week], -- Source: https://blog.sqlauthority.com/2012/11/25/sql-server-find-weekend-and-weekdays-from-datetime-in-sql-server-2012/
@@ -63,8 +63,20 @@ SELECT
     CHOOSE(DATEPART(dw, d.[date]), 1,0,0,0,0,0,1) as [is_weekend]-- Source: https://blog.sqlauthority.com/2012/11/25/sql-server-find-weekend-and-weekdays-from-datetime-in-sql-server-2012/
 FROM (
     SELECT DISTINCT
-        CONVERT(DATE, [started_at]) as [date]
-    FROM [dbo].[staging_trip]
+        all_dates.[date]
+    FROM (
+        SELECT DISTINCT
+            CONVERT(DATE, [started_at]) as [date]
+        FROM [dbo].[staging_trip]
+        UNION
+        SELECT DISTINCT
+            CONVERT(DATE, [ended_at]) as [date]
+        FROM [dbo].[staging_trip]
+        UNION
+        SELECT DISTINCT
+            [date]
+        FROM [dbo].[staging_payment]
+    ) all_dates
 ) as d;
 GO
 
@@ -98,8 +110,16 @@ SELECT
     END as [time_of_day]
 FROM (
     SELECT DISTINCT
+        all_time.[time]
+    FROM (
+    SELECT DISTINCT
         CAST([started_at] as TIME) as [time]
     FROM [dbo].[staging_trip]
+    UNION
+    SELECT DISTINCT
+        CAST([ended_at] as TIME) as [time]
+    FROM [dbo].[staging_trip]
+    ) all_time
 ) as t;
 GO
 
@@ -149,6 +169,8 @@ FROM [dbo].[staging_rider]
 GO
 
 -- FACT TABLES
+
+-- fact_trip
 IF OBJECT_ID('dbo.fact_trip') IS NOT NULL
 BEGIN
     DROP EXTERNAL TABLE dbo.fact_trip;
@@ -194,5 +216,33 @@ left join [dbo].[dim_rider] r
     on t.[member_id] = r.[rider_id]
 left join [dbo].[dim_account] a
     on r.[account_number] = a.[account_number]
+;
+GO
+
+-- fact_payment
+IF OBJECT_ID('dbo.fact_payment') IS NOT NULL
+BEGIN
+    DROP EXTERNAL TABLE dbo.fact_payment;
+END
+CREATE EXTERNAL TABLE dbo.fact_payment 
+WITH (
+    LOCATION = 'fact_payment',
+    DATA_SOURCE = '<TBD>',
+    FILE_FORMAT = [SynapseDelimitedTextFormat]
+)
+AS
+SELECT
+    p.[payment_id] as [payment_key],
+    d.[date_key],
+    a.[account_key],
+    DATEDIFF(yy, r.[birthday], a.[start_date]) as [age_rider_account_start],
+    p.[amount]
+FROM [dbo].[staging_payment] p
+left join [dbo].[dim_date] d
+    on p.[date] = d.[date]
+left join [dbo].[dim_account] a
+    on p.[account_number] = a.[account_number]
+left join [dbo].[dim_rider] r
+    on p.[account_number] = r.[account_number]
 ;
 GO
